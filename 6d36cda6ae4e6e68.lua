@@ -1870,91 +1870,140 @@ local function getService(name)
     task.wait(0.15)
     TweenService:Create(KeyMain.Hide, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {ImageTransparency = 0.3}):Play()
 
+local checkingPayhip = false
+local validPayhipKey = false
+local productSecret = Settings.KeySettings.ProductSecret and Settings.KeySettings.ProductSecret[1]
 
-    KeyUI.Main.Input.InputBox.FocusLost:Connect(function()
+KeyUI.Main.Input.InputBox.FocusLost:Connect(function()
     local enteredKey = KeyMain.Input.InputBox.Text
     if #enteredKey == 0 then return end
+    
+    -- ===== STEP 1: FIRST TRY PAYHIP VERIFICATION =====
+    local function verifyPayhipLicense(licenseKey)
+        if not productSecret or checkingPayhip then return false end
+        
+        checkingPayhip = true
+        local isLicensed = false
+        local licenseData = nil
+        
+        local success, result = pcall(function()
+            local response = requestFunc({
+                Url = "https://payhip.com/api/v2/license/verify?license_key=" .. licenseKey,
+                Method = "GET",
+                Headers = {
+                    ["product-secret-key"] = productSecret
+                }
+            })
+            
+            if response and response.Body then
+                local data = HttpService:JSONDecode(response.Body)
+                if data and data.data and data.data.enabled == true then
+                    isLicensed = true
+                    licenseData = data.data
+                end
+            end
+        end)
+        
+        checkingPayhip = false
+        return isLicensed, licenseData
+    end
+    
+    -- Try Payhip verification first if Product Secret is configured
+    if productSecret and productSecret ~= "" then
+        local isLicensed, licenseData = verifyPayhipLicense(enteredKey)
+        
+        if isLicensed then
+            print("[PAYHIP] License valid! Buyer:", licenseData.buyer_email, "Uses:", licenseData.uses)
+            validPayhipKey = true
+            KeyFound = true
+            FoundKey = enteredKey
+        end
+    end
+    
+    -- ===== STEP 2: FALLBACK TO ORIGINAL KEY SYSTEM =====
+    if not validPayhipKey then
+        local KeyFound = false
+        local FoundKey = ''
+        
+        -- Original key system logic (from Pastebin)
+        if Settings.KeySettings.GrabKeyFromSite then
+            for i, Key in ipairs(Settings.KeySettings.Key) do
+                local Success, Response = pcall(function()
+                    Settings.KeySettings.Key[i] = tostring(game:HttpGet(Key):gsub("[\n\r]", " "))
+                    Settings.KeySettings.Key[i] = string.gsub(Settings.KeySettings.Key[i], " ", "")
+                end)
+                if not Success then
+                    print("Rayfield | "..Key.." Error " ..tostring(Response))
+                end
+            end
+        end
+        
+        for _, MKey in ipairs(Settings.KeySettings.Key) do
+            if enteredKey == MKey then
+                KeyFound = true
+                FoundKey = enteredKey
+                break
+            end
+        end
+    end
+    
+    -- ===== STEP 3: HANDLE VALIDATION RESULT =====
+    if KeyFound or validPayhipKey then
+        -- Animate closing the UI (success)
+        TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
+        TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
+        TweenService:Create(KeyMain.Shadow.Image, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
+        TweenService:Create(KeyMain.Title, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+        TweenService:Create(KeyMain.Subtitle, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+        TweenService:Create(KeyMain.KeyNote, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+        TweenService:Create(KeyMain.Input, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
+        TweenService:Create(KeyMain.Input.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {Transparency = 1}):Play()
+        TweenService:Create(KeyMain.Input.InputBox, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+        TweenService:Create(KeyMain.NoteTitle, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+        TweenService:Create(KeyMain.NoteMessage, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+        TweenService:Create(KeyMain.Hide, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
+        task.wait(0.51)
+        Passthrough = true
+        KeyMain.Visible = false
 
-    local HttpService = game:GetService("HttpService")
-    local url = "https://work.ink/_api/v2/token/isValid/" .. enteredKey
-
-    local KeyFound = false
-    local FoundKey = ''
-    local success, response = pcall(function()
-    return game:HttpGet(url)
-    end)
-
-    if success then
-    local decoded
-    local decodeSuccess, decodeResult = pcall(function()
-    return HttpService:JSONDecode(response)
-    end)
-
-    if decodeSuccess and decodeResult.valid == true then
-    KeyFound = true
-    FoundKey = enteredKey
+        if Settings.KeySettings.SaveKey then
+            if writefile then
+                writefile(RayfieldFolder.."/Key System".."/"..Settings.KeySettings.FileName..ConfigurationExtension, FoundKey)
+            end
+            RayfieldLibrary:Notify({Title = "Key System", Content = "The key for this script has been saved successfully.", Image = 3605522284})
+        end
     else
-    warn("Invalid key: Server responded with valid = false or response format incorrect.")
-    end
-    else
-    warn("Failed to contact server:", response)
-    end
+        -- Invalid key handling
+        if AttemptsRemaining == 0 then
+            -- Out of attempts - close UI and shutdown
+            TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
+            TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
+            TweenService:Create(KeyMain.Shadow.Image, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
+            TweenService:Create(KeyMain.Title, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+            TweenService:Create(KeyMain.Subtitle, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+            TweenService:Create(KeyMain.KeyNote, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+            TweenService:Create(KeyMain.Input, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
+            TweenService:Create(KeyMain.Input.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {Transparency = 1}):Play()
+            TweenService:Create(KeyMain.Input.InputBox, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+            TweenService:Create(KeyMain.NoteTitle, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+            TweenService:Create(KeyMain.NoteMessage, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
+            TweenService:Create(KeyMain.Hide, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
+            task.wait(0.45)
+            Players.LocalPlayer:Kick("No Attempts Remaining")
+            game:Shutdown()
+        end
 
-    if KeyFound then
-    -- Animate closing the UI
-    TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
-    TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
-    TweenService:Create(KeyMain.Shadow.Image, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Title, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Subtitle, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.KeyNote, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Input, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Input.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {Transparency = 1}):Play()
-    TweenService:Create(KeyMain.Input.InputBox, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.NoteTitle, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.NoteMessage, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Hide, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
-    task.wait(0.51)
-    Passthrough = true
-    KeyMain.Visible = false
-
-    if Settings.KeySettings.SaveKey then
-    if writefile then
-    writefile(RayfieldFolder.."/Key System".."/"..Settings.KeySettings.FileName..ConfigurationExtension, FoundKey)
+        KeyMain.Input.InputBox.Text = ""
+        AttemptsRemaining = AttemptsRemaining - 1
+        TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
+        TweenService:Create(KeyMain, TweenInfo.new(0.4, Enum.EasingStyle.Elastic), {Position = UDim2.new(0.495,0,0.5,0)}):Play()
+        task.wait(0.1)
+        TweenService:Create(KeyMain, TweenInfo.new(0.4, Enum.EasingStyle.Elastic), {Position = UDim2.new(0.505,0,0.5,0)}):Play()
+        task.wait(0.1)
+        TweenService:Create(KeyMain, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {Position = UDim2.new(0.5,0,0.5,0)}):Play()
+        TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 500, 0, 187)}):Play()
     end
-    RayfieldLibrary:Notify({Title = "Key System", Content = "The key for this script has been saved successfully.", Image = 3605522284})
-    end
-    else
-    if AttemptsRemaining == 0 then
-    -- Same handling as before when out of attempts
-    TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
-    TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
-    TweenService:Create(KeyMain.Shadow.Image, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Title, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Subtitle, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.KeyNote, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Input, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Input.UIStroke, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {Transparency = 1}):Play()
-    TweenService:Create(KeyMain.Input.InputBox, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.NoteTitle, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.NoteMessage, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {TextTransparency = 1}):Play()
-    TweenService:Create(KeyMain.Hide, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
-    task.wait(0.45)
-    Players.LocalPlayer:Kick("No Attempts Remaining")
-    game:Shutdown()
-    end
-
-    KeyMain.Input.InputBox.Text = ""
-    AttemptsRemaining = AttemptsRemaining - 1
-    TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
-    TweenService:Create(KeyMain, TweenInfo.new(0.4, Enum.EasingStyle.Elastic), {Position = UDim2.new(0.495,0,0.5,0)}):Play()
-    task.wait(0.1)
-    TweenService:Create(KeyMain, TweenInfo.new(0.4, Enum.EasingStyle.Elastic), {Position = UDim2.new(0.505,0,0.5,0)}):Play()
-    task.wait(0.1)
-    TweenService:Create(KeyMain, TweenInfo.new(0.4, Enum.EasingStyle.Exponential), {Position = UDim2.new(0.5,0,0.5,0)}):Play()
-    TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 500, 0, 187)}):Play()
-    end
-    end)
+end)
 
 
     KeyMain.Hide.MouseButton1Click:Connect(function()
@@ -4024,5 +4073,6 @@ local function getService(name)
     Main.Notice.Visible = false
     end
     end)
+
 
     return RayfieldLibrary
