@@ -1875,81 +1875,69 @@ local validPayhipKey = false
 local productSecret = Settings.KeySettings.ProductSecret and Settings.KeySettings.ProductSecret[1]
 
 KeyUI.Main.Input.InputBox.FocusLost:Connect(function()
-    local enteredKey = KeyMain.Input.InputBox.Text
-    if #enteredKey == 0 then return end
+    if #KeyUI.Main.Input.InputBox.Text == 0 then return end
     
-    -- ===== STEP 1: FIRST TRY PAYHIP VERIFICATION =====
-    local function verifyPayhipLicense(licenseKey)
-        if not productSecret or checkingPayhip then return false end
-        
-        checkingPayhip = true
-        local isLicensed = false
-        local licenseData = nil
-        
-        local success, result = pcall(function()
-            local response = requestFunc({
-                Url = "https://payhip.com/api/v2/license/verify?license_key=" .. licenseKey,
-                Method = "GET",
-                Headers = {
-                    ["product-secret-key"] = productSecret
-                }
-            })
-            
-            if response and response.Body then
-                local data = HttpService:JSONDecode(response.Body)
-                if data and data.data and data.data.enabled == true then
-                    isLicensed = true
-                    licenseData = data.data
-                end
-            end
-        end)
-        
-        checkingPayhip = false
-        return isLicensed, licenseData
-    end
+    local enteredKey = KeyUI.Main.Input.InputBox.Text
+    local KeyFound = false
+    local FoundKey = ''
+    local payhipProductSecret = Settings.KeySettings.ProductSecret and Settings.KeySettings.ProductSecret[1]
     
-    -- Try Payhip verification first if Product Secret is configured
-    if productSecret and productSecret ~= "" then
-        local isLicensed, licenseData = verifyPayhipLicense(enteredKey)
-        
-        if isLicensed then
-            print("[PAYHIP] License valid! Buyer:", licenseData.buyer_email, "Uses:", licenseData.uses)
-            validPayhipKey = true
+    -- ========== STEP 1: WORK.INK VALIDATION ==========
+    local workInkValid = false
+    local workInkSuccess, workInkResponse = pcall(function()
+        return requestFunc({
+            Url = "https://work.ink/_api/v2/token/isValid/" .. enteredKey,
+            Method = "GET"
+        })
+    end)
+    
+    if workInkSuccess and workInkResponse and workInkResponse.Body then
+        local data = game:GetService("HttpService"):JSONDecode(workInkResponse.Body)
+        if data and data.valid == true then
+            workInkValid = true
             KeyFound = true
             FoundKey = enteredKey
         end
     end
     
-    -- ===== STEP 2: FALLBACK TO ORIGINAL KEY SYSTEM =====
-    if not validPayhipKey then
-        local KeyFound = false
-        local FoundKey = ''
+    -- ========== STEP 2: PAYHIP VALIDATION (if work.ink failed) ==========
+    if not workInkValid and payhipProductSecret and payhipProductSecret ~= "" then
+        local payhipValid = false
+        local payhipSuccess, payhipResponse = pcall(function()
+            return requestFunc({
+                Url = "https://payhip.com/api/v2/license/verify?license_key=" .. enteredKey,
+                Method = "GET",
+                Headers = {
+                    ["product-secret-key"] = payhipProductSecret
+                }
+            })
+        end)
         
-        -- Original key system logic (from Pastebin)
-        if Settings.KeySettings.GrabKeyFromSite then
-            for i, Key in ipairs(Settings.KeySettings.Key) do
-                local Success, Response = pcall(function()
-                    Settings.KeySettings.Key[i] = tostring(game:HttpGet(Key):gsub("[\n\r]", " "))
-                    Settings.KeySettings.Key[i] = string.gsub(Settings.KeySettings.Key[i], " ", "")
-                end)
-                if not Success then
-                    print("Rayfield | "..Key.." Error " ..tostring(Response))
-                end
+        if payhipSuccess and payhipResponse and payhipResponse.Body then
+            local data = game:GetService("HttpService"):JSONDecode(payhipResponse.Body)
+            if data and data.data and data.data.enabled == true then
+                payhipValid = true
+                KeyFound = true
+                FoundKey = enteredKey
             end
         end
-        
+    end
+    
+    -- ========== STEP 3: ORIGINAL KEY CHECK (if both APIs failed) ==========
+    if not workInkValid and not (payhipProductSecret and payhipProductSecret ~= "") then
+        -- Only check original keys if Payhip isn't even configured
         for _, MKey in ipairs(Settings.KeySettings.Key) do
             if enteredKey == MKey then
                 KeyFound = true
-                FoundKey = enteredKey
+                FoundKey = MKey
                 break
             end
         end
     end
     
-    -- ===== STEP 3: HANDLE VALIDATION RESULT =====
-    if KeyFound or validPayhipKey then
-        -- Animate closing the UI (success)
+    -- ========== STEP 4: HANDLE RESULT ==========
+    if KeyFound then 
+        -- SUCCESS - Key is valid (from work.ink, Payhip, or original)
         TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
         TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
         TweenService:Create(KeyMain.Shadow.Image, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
@@ -1965,7 +1953,7 @@ KeyUI.Main.Input.InputBox.FocusLost:Connect(function()
         task.wait(0.51)
         Passthrough = true
         KeyMain.Visible = false
-
+        
         if Settings.KeySettings.SaveKey then
             if writefile then
                 writefile(RayfieldFolder.."/Key System".."/"..Settings.KeySettings.FileName..ConfigurationExtension, FoundKey)
@@ -1973,9 +1961,8 @@ KeyUI.Main.Input.InputBox.FocusLost:Connect(function()
             RayfieldLibrary:Notify({Title = "Key System", Content = "The key for this script has been saved successfully.", Image = 3605522284})
         end
     else
-        -- Invalid key handling
+        -- FAILED - All validation methods failed
         if AttemptsRemaining == 0 then
-            -- Out of attempts - close UI and shutdown
             TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
             TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
             TweenService:Create(KeyMain.Shadow.Image, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {ImageTransparency = 1}):Play()
@@ -1992,7 +1979,7 @@ KeyUI.Main.Input.InputBox.FocusLost:Connect(function()
             Players.LocalPlayer:Kick("No Attempts Remaining")
             game:Shutdown()
         end
-
+        
         KeyMain.Input.InputBox.Text = ""
         AttemptsRemaining = AttemptsRemaining - 1
         TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 467, 0, 175)}):Play()
@@ -2004,7 +1991,6 @@ KeyUI.Main.Input.InputBox.FocusLost:Connect(function()
         TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {Size = UDim2.new(0, 500, 0, 187)}):Play()
     end
 end)
-
 
     KeyMain.Hide.MouseButton1Click:Connect(function()
     TweenService:Create(KeyMain, TweenInfo.new(0.6, Enum.EasingStyle.Exponential), {BackgroundTransparency = 1}):Play()
@@ -4076,3 +4062,4 @@ end)
 
 
     return RayfieldLibrary
+
